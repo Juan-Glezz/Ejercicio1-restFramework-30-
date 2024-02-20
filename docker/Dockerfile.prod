@@ -1,0 +1,83 @@
+###########
+# BUILDER #
+###########
+
+# pull official base image
+FROM python:slim-bookworm as builder
+
+# set work directory
+WORKDIR /usr/src/app
+
+# set environment variables
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc
+
+# lint
+# RUN python -m pip install --upgrade pip
+RUN pip install flake8==6.0.0
+# COPY . /usr/src/app/
+#RUN flake8 --ignore=E501,F401 .
+
+# install python dependencies
+COPY ./docker/requirements.prod.txt ./requirements.txt
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requirements.txt
+
+#########
+# FINAL #
+#########
+
+# pull official base image
+FROM python:slim-bookworm
+
+
+# install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends netcat-traditional
+
+# create the django user
+RUN addgroup --system django \
+     && adduser --system --group django
+USER django
+
+#SET work directory
+ENV HOME=/home/django
+ENV PROJECT_NAME=mysite
+ENV APP_HOME=$HOME/${PROJECT_NAME}
+WORKDIR $APP_HOME
+RUN mkdir $APP_HOME/staticfiles
+
+# set environment variables
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+ENV VIRTUAL_ENV=$HOME/${PROJECT_NAME}_venv
+
+# create virtual environment
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+COPY --from=builder /usr/src/app/wheels /wheels
+COPY --from=builder /usr/src/app/requirements.txt .
+RUN pip install --upgrade pip
+RUN pip install --no-cache /wheels/*
+# COPY ./requirements.prod.txt ./requirements.txt
+# RUN pip install -r requirements.txt
+
+# copy entrypoint.prod.sh
+COPY --chown=django:django ./docker/entrypoint.prod.sh .
+RUN sed -i 's/\r$//g'  $APP_HOME/entrypoint.prod.sh
+RUN chmod +x  $APP_HOME/entrypoint.prod.sh
+
+# copy project
+COPY --chown=django:django ./../mysite $APP_HOME
+
+# # chown all the files to the app user
+# RUN chown -R django:django $APP_HOME
+
+# # change to the app user
+# USER djangogirls
+
+# run entrypoint.sh
+ENTRYPOINT ["/home/django/mysite/entrypoint.prod.sh"]
